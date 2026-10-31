@@ -98,6 +98,7 @@ fun ExtensionScreen(
     // KMK -->
     selection: Set<String> = emptySet(),
     onToggleSelection: (Extension) -> Unit = {},
+    downloads: Map<String, InstallStep> = emptyMap(),
     // KMK <--
 ) {
     val navigator = LocalNavigator.currentOrThrow
@@ -143,6 +144,7 @@ fun ExtensionScreen(
                     // KMK -->
                     selection = selection,
                     onToggleSelection = onToggleSelection,
+                    downloads = downloads,
                     // KMK <--
                 )
             }
@@ -166,6 +168,7 @@ private fun ExtensionContent(
     // KMK -->
     selection: Set<String>,
     onToggleSelection: (Extension) -> Unit,
+    downloads: Map<String, InstallStep>,
     // KMK <--
 ) {
     val context = LocalContext.current
@@ -269,6 +272,7 @@ private fun ExtensionContent(
                     modifier = Modifier.animateItemFastScroll(),
                     item = item,
                     // KMK -->
+                    installStep = downloads[item.extension.selectionKey()] ?: InstallStep.Idle,
                     selectionMode = selection.isNotEmpty(),
                     isSelected = item.extension.selectionKey() in selection,
                     onToggleSelection = onToggleSelection,
@@ -337,12 +341,15 @@ private fun ExtensionItem(
     onClickItemSecondaryAction: (Extension) -> Unit,
     modifier: Modifier = Modifier,
     // KMK -->
+    installStep: InstallStep = item.installStep,
     selectionMode: Boolean = false,
     isSelected: Boolean = false,
     onToggleSelection: (Extension) -> Unit = {},
     // KMK <--
 ) {
-    val (extension, installStep) = item
+    // KMK -->
+    val extension = item.extension
+    // KMK <--
     // KMK -->
     // While selecting, a plain tap toggles the selection instead of opening/installing
     val onClick = { if (selectionMode) onToggleSelection(extension) else onClickItem(extension) }

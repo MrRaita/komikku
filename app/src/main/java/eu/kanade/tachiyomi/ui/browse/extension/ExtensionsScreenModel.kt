@@ -19,6 +19,7 @@ import eu.kanade.tachiyomi.util.system.isPackageInstalled
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
@@ -48,24 +49,22 @@ class ExtensionsScreenModel(
     private val currentDownloads = MutableStateFlow<Map<String, InstallStep>>(hashMapOf())
 
     // KMK -->
+    /**
+     * Install progress per extension (key: [selectionKey]). Kept out of the list pipeline on purpose:
+     * rebuilding the whole extension list on every install step is what made the rows react late.
+     */
+    val downloads = currentDownloads.asStateFlow()
+    // KMK <--
+
+    // KMK -->
     private val appContext: Application by lazy { Injekt.get() }
     // KMK <--
 
     init {
         val context = Injekt.get<Application>()
-        val extensionMapper: (Map<String, InstallStep>) -> ((Extension) -> ExtensionUiModel.Item) = { map ->
-            {
-                ExtensionUiModel.Item(
-                    it,
-                    map[
-                        it.pkgName +
-                            // KMK -->
-                            "_${it.signatureHash}",
-                        // KMK <--
-                    ] ?: InstallStep.Idle,
-                )
-            }
-        }
+        // KMK -->
+        val extensionMapper: (Extension) -> ExtensionUiModel.Item = { ExtensionUiModel.Item(it) }
+        // KMK <--
 
         screenModelScope.launchIO {
             combine(
@@ -78,11 +77,10 @@ class ExtensionsScreenModel(
                     .distinctUntilChanged()
                     .debounce(SEARCH_DEBOUNCE_MILLIS),
                 // KMK <--
-                currentDownloads,
                 getExtensions.subscribe(),
-            ) { predicate, nsfwOnly, downloads, (_updates, _installed, _available, _untrusted) ->
+            ) { predicate, nsfwOnly, (_updates, _installed, _available, _untrusted) ->
                 buildMap {
-                    val updates = _updates.filter(predicate).map(extensionMapper(downloads))
+                    val updates = _updates.filter(predicate).map(extensionMapper)
                         // KMK -->
                         .filter { !nsfwOnly || it.extension.isNsfw }
                     // KMK <--
@@ -90,11 +88,11 @@ class ExtensionsScreenModel(
                         put(ExtensionUiModel.Header.Resource(MR.strings.ext_updates_pending), updates)
                     }
 
-                    val installed = _installed.filter(predicate).map(extensionMapper(downloads))
+                    val installed = _installed.filter(predicate).map(extensionMapper)
                         // KMK -->
                         .filter { !nsfwOnly || it.extension.isNsfw }
                     // KMK <--
-                    val untrusted = _untrusted.filter(predicate).map(extensionMapper(downloads))
+                    val untrusted = _untrusted.filter(predicate).map(extensionMapper)
                         // KMK -->
                         .filter { !nsfwOnly || it.extension.isNsfw }
                     // KMK <--
@@ -111,7 +109,7 @@ class ExtensionsScreenModel(
                         .toSortedMap(LocaleHelper.comparator)
                         .map { (lang, exts) ->
                             ExtensionUiModel.Header.Text(LocaleHelper.getSourceDisplayName(lang, context)) to
-                                exts.map(extensionMapper(downloads))
+                                exts.map(extensionMapper)
                         }
                     if (languagesWithExtensions.isNotEmpty()) {
                         putAll(languagesWithExtensions)
@@ -397,6 +395,9 @@ object ExtensionUiModel {
 
     data class Item(
         val extension: Extension,
-        val installStep: InstallStep,
+        // KMK -->
+        // Filled in by the UI from ExtensionsScreenModel.downloads
+        val installStep: InstallStep = InstallStep.Idle,
+        // KMK <--
     )
 }

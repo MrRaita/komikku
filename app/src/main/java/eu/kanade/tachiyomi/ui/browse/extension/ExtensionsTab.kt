@@ -45,6 +45,9 @@ fun extensionsTab(
     val context = LocalContext.current
 
     val state by extensionsScreenModel.state.collectAsState()
+    // KMK -->
+    val downloads by extensionsScreenModel.downloads.collectAsState()
+    // KMK <--
     var privateExtensionToUninstall by remember { mutableStateOf<Extension?>(null) }
 
     // KMK -->
@@ -167,6 +170,7 @@ fun extensionsTab(
                 // KMK -->
                 selection = state.selection,
                 onToggleSelection = extensionsScreenModel::toggleSelection,
+                downloads = downloads,
                 // KMK <--
             )
 
