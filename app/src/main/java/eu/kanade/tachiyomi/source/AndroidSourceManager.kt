@@ -14,6 +14,7 @@ import eu.kanade.tachiyomi.source.online.all.MergedSource
 import eu.kanade.tachiyomi.source.online.all.NHentai
 import eu.kanade.tachiyomi.source.online.all.Pururin
 import eu.kanade.tachiyomi.source.online.english.EightMuses
+import eu.kanade.tachiyomi.util.lang.throttleLatest
 import exh.log.xLogD
 import exh.source.BlacklistedSources
 import exh.source.DelegatedHttpSource
@@ -84,6 +85,8 @@ class AndroidSourceManager(
             extensionManager.isInitialized
                 .filter { it }
                 .flatMapLatest { extensionManager.installedExtensionsFlow }
+                // Bulk installs/removals fire one event per extension; rebuild the source map at most every 250ms
+                .throttleLatest(SOURCE_REBUILD_THROTTLE_MILLIS)
                 // KMK <--
                 // SY -->
                 .combine(exhPreferences.enableExhentai().changes()) { extensions, enableExhentai ->
@@ -289,6 +292,10 @@ class AndroidSourceManager(
     // SY -->
     companion object {
         private const val fillInSourceId = Long.MAX_VALUE
+
+        // KMK -->
+        private const val SOURCE_REBUILD_THROTTLE_MILLIS = 250L
+        // KMK <--
 
         /*
          * If an extension is declaring sub-classes based on the main class, then set `factory=true` and

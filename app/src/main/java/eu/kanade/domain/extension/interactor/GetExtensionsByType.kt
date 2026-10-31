@@ -33,20 +33,21 @@ class GetExtensionsByType(
             val untrusted = _untrusted
                 .sortedWith(compareBy(String.CASE_INSENSITIVE_ORDER) { it.name })
 
+            // KMK -->
+            // This used to scan the installed and untrusted lists for every available extension
+            // (O(available × installed)) on every emission, which crawls when hundreds of
+            // extensions are installed at once. Use hash lookups instead.
+            val installedKeys = _installed.mapTo(HashSet()) { it.pkgName to it.signatureHash }
+            val untrustedKeys = _untrusted.mapTo(HashSet()) { it.pkgName to it.signatureHash }
+            // KMK <--
+
             val available = _available
                 .filter { extension ->
-                    _installed.none {
-                        // KMK -->
-                        it.signatureHash == extension.signatureHash &&
-                            // KMK <--
-                            it.pkgName == extension.pkgName
-                    } &&
-                        _untrusted.none {
-                            // KMK -->
-                            it.signatureHash == extension.signatureHash &&
-                                // KMK <--
-                                it.pkgName == extension.pkgName
-                        } &&
+                    // KMK -->
+                    val key = extension.pkgName to extension.signatureHash
+                    key !in installedKeys &&
+                        key !in untrustedKeys &&
+                        // KMK <--
                         (showNsfwSources || !extension.isNsfw)
                 }
                 .flatMap { ext ->

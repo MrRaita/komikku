@@ -250,13 +250,20 @@ private fun ExtensionContent(
             items(
                 items = items,
                 contentType = { "item" },
+                // KMK -->
+                // The key used to be the hash of the whole item, which changes on every install step,
+                // so a row that was installing was treated as a brand new item (re-created and re-animated).
+                // Use a stable identity instead.
                 key = { item ->
-                    when (item.extension) {
-                        is Extension.Untrusted -> "extension-untrusted-${item.hashCode()}"
-                        is Extension.Installed -> "extension-installed-${item.hashCode()}"
-                        is Extension.Available -> "extension-available-${item.hashCode()}"
+                    val extension = item.extension
+                    val id = "${extension.pkgName}_${extension.signatureHash}_${extension.storeName}_${extension.versionCode}"
+                    when (extension) {
+                        is Extension.Untrusted -> "extension-untrusted-$id"
+                        is Extension.Installed -> "extension-installed-$id"
+                        is Extension.Available -> "extension-available-$id"
                     }
                 },
+                // KMK <--
             ) { item ->
                 ExtensionItem(
                     modifier = Modifier.animateItemFastScroll(),

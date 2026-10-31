@@ -13,6 +13,7 @@ import eu.kanade.tachiyomi.extension.ExtensionManager
 import eu.kanade.tachiyomi.extension.model.Extension
 import eu.kanade.tachiyomi.extension.model.InstallStep
 import eu.kanade.tachiyomi.source.online.HttpSource
+import eu.kanade.tachiyomi.util.lang.throttleLatest
 import eu.kanade.tachiyomi.util.system.LocaleHelper
 import eu.kanade.tachiyomi.util.system.isPackageInstalled
 import kotlinx.coroutines.delay
@@ -124,6 +125,10 @@ class ExtensionsScreenModel(
                     // KMK <--
                 }
             }
+                // KMK -->
+                // Installing/removing many extensions emits constantly; rebuild the list at most every 150ms
+                .throttleLatest(LIST_UPDATE_THROTTLE_MILLIS)
+                // KMK <--
                 .collectLatest { items ->
                     mutableState.update { state ->
                         state.copy(
@@ -377,6 +382,8 @@ class ExtensionsScreenModel(
 }
 
 // KMK -->
+private const val LIST_UPDATE_THROTTLE_MILLIS = 150L
+
 fun Extension.selectionKey() = "${pkgName}_$signatureHash"
 // KMK <--
 
