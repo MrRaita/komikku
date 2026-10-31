@@ -13,12 +13,16 @@ import kotlinx.collections.immutable.PersistentMap
 import kotlinx.collections.immutable.persistentMapOf
 import kotlinx.collections.immutable.toImmutableMap
 import kotlinx.collections.immutable.toPersistentMap
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -33,7 +37,9 @@ import tachiyomi.domain.manga.model.Manga
 import tachiyomi.domain.source.service.SourceManager
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
 
 abstract class SearchScreenModel(
     initialState: State = State(),
@@ -57,6 +63,16 @@ abstract class SearchScreenModel(
 
     protected var extensionFilter: String? = null
 
+    // KMK -->
+    // With hundreds of sources every finished request used to re-sort and re-render the whole list
+    // (and could overwrite a concurrent update). Results are now collected and applied in batches.
+    private class PendingResult(val generation: Int, val result: SearchItemResult)
+
+    private val searchGeneration = AtomicInteger()
+    private val pendingResults = ConcurrentHashMap<Source, PendingResult>()
+    private val flushSignal = Channel<Unit>(Channel.CONFLATED)
+    // KMK <--
+
     open val sortComparator = { map: Map<Source, SearchItemResult> ->
         compareBy<Source>(
             { (map[it] as? SearchItemResult.Success)?.isEmpty ?: true },
@@ -66,6 +82,14 @@ abstract class SearchScreenModel(
     }
 
     init {
+        // KMK -->
+        screenModelScope.launch(Dispatchers.Default) {
+            flushSignal.receiveAsFlow().collect {
+                delay(RESULT_BATCH_DELAY_MS)
+                flushPendingResults()
+            }
+        }
+        // KMK <--
         screenModelScope.launch {
             preferences.globalSearchFilterState().changes().collectLatest { state ->
                 mutableState.update { it.copy(onlyShowHasResults = state) }
@@ -156,6 +180,11 @@ abstract class SearchScreenModel(
 
         searchJob?.cancel()
 
+        // KMK -->
+        val generation = searchGeneration.incrementAndGet()
+        pendingResults.clear()
+        // KMK <--
+
         val sources = getSelectedSources()
 
         // Reuse previous results if possible
@@ -192,11 +221,15 @@ abstract class SearchScreenModel(
                             .let { networkToLocalManga(it) }
 
                         if (isActive) {
-                            updateItem(source, SearchItemResult.Success(titles))
+                            // KMK -->
+                            queueResult(source, SearchItemResult.Success(titles), generation)
+                            // KMK <--
                         }
                     } catch (e: Exception) {
                         if (isActive) {
-                            updateItem(source, SearchItemResult.Error(e))
+                            // KMK -->
+                            queueResult(source, SearchItemResult.Error(e), generation)
+                            // KMK <--
                         }
                     }
                 }
@@ -218,6 +251,32 @@ abstract class SearchScreenModel(
     private fun updateItem(source: Source, result: SearchItemResult) {
         updateItems(state.value.items + (source to result))
     }
+
+    // KMK -->
+    private fun queueResult(source: Source, result: SearchItemResult, generation: Int) {
+        pendingResults[source] = PendingResult(generation, result)
+        flushSignal.trySend(Unit)
+    }
+
+    private fun flushPendingResults() {
+        val generation = searchGeneration.get()
+        val batch = HashMap<Source, SearchItemResult>()
+        pendingResults.entries.toList().forEach { (source, pending) ->
+            if (pendingResults.remove(source, pending) && pending.generation == generation) {
+                batch[source] = pending.result
+            }
+        }
+        if (batch.isEmpty()) return
+
+        mutableState.update { current ->
+            if (generation != searchGeneration.get()) return@update current
+            val applicable = batch.filterKeys { it in current.items }
+            if (applicable.isEmpty()) return@update current
+            val merged = current.items.putAll(applicable)
+            current.copy(items = merged.toSortedMap(sortComparator(merged)).toPersistentMap())
+        }
+    }
+    // KMK <--
 
     fun setMigrateDialog(currentId: Long, target: Manga) {
         screenModelScope.launchIO {
@@ -273,3 +332,7 @@ sealed interface SearchItemResult {
         return !onlyShowHasResults || (this is Success && !this.isEmpty)
     }
 }
+
+// KMK -->
+private const val RESULT_BATCH_DELAY_MS = 150L
+// KMK <--

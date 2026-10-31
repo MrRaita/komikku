@@ -15,6 +15,7 @@ import eu.kanade.tachiyomi.source.SourceFactory
 import eu.kanade.tachiyomi.util.lang.Hash
 import eu.kanade.tachiyomi.util.storage.copyAndSetReadOnlyTo
 import eu.kanade.tachiyomi.util.system.ChildFirstPathClassLoader
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.runBlocking
@@ -175,7 +176,11 @@ internal object ExtensionLoader {
             val extStores = getExtensionStores.get()
             // KMK <--
             val deferred = extPkgs.map {
-                async {
+                // KMK -->
+                // runBlocking's event loop is single-threaded, so a plain async{} loaded every
+                // extension one after another. Dispatch to Default so they actually load in parallel.
+                async(Dispatchers.Default) {
+                    // KMK <--
                     loadExtension(
                         context,
                         it,

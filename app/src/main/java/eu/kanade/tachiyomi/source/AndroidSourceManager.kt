@@ -33,6 +33,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -76,7 +78,13 @@ class AndroidSourceManager(
 
     init {
         scope.launch {
-            extensionManager.installedExtensionsFlow
+            // KMK -->
+            // Extensions load in the background now. Start only once they're loaded so that
+            // isInitialized never becomes true while just the built-in sources exist.
+            extensionManager.isInitialized
+                .filter { it }
+                .flatMapLatest { extensionManager.installedExtensionsFlow }
+                // KMK <--
                 // SY -->
                 .combine(exhPreferences.enableExhentai().changes()) { extensions, enableExhentai ->
                     extensions to enableExhentai
@@ -239,11 +247,28 @@ class AndroidSourceManager(
     }
     // KMK <--
 
+    // KMK -->
+    // Every rebuild of the source map used to hit the DB once per source (hundreds of queries
+    // for large extension sets). Remember what has already been synced in this session.
+    private val syncedStubSources = ConcurrentHashMap<Long, StubSource>()
+    // KMK <--
+
     private fun registerStubSource(source: StubSource) {
+        // KMK -->
+        if (syncedStubSources[source.id] == source) return
+        // KMK <--
         scope.launch {
             val dbSource = sourceRepository.getStubSource(source.id)
-            if (dbSource == source) return@launch
+            if (dbSource == source) {
+                // KMK -->
+                syncedStubSources[source.id] = source
+                // KMK <--
+                return@launch
+            }
             sourceRepository.upsertStubSource(source.id, source.lang, source.name)
+            // KMK -->
+            syncedStubSources[source.id] = source
+            // KMK <--
             if (dbSource != null) {
                 downloadManager.renameSource(dbSource, source)
             }

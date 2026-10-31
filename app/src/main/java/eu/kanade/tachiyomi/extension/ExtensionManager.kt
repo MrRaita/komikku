@@ -29,8 +29,12 @@ import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emptyFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import logcat.LogPriority
 import tachiyomi.core.common.util.lang.withUIContext
 import tachiyomi.core.common.util.system.logcat
@@ -84,7 +88,18 @@ class ExtensionManager(
     val untrustedExtensionsFlow = untrustedExtensionMapFlow.mapExtensions(scope)
 
     init {
-        initExtensions()
+        // KMK -->
+        // Don't block whoever first touches ExtensionManager (usually the main thread) while every
+        // extension is loaded. Consumers already wait on isInitialized / observe the flows.
+        scope.launch {
+            try {
+                initExtensions()
+            } catch (e: Exception) {
+                logcat(LogPriority.ERROR, e)
+                _isInitialized.value = true
+            }
+        }
+        // KMK <--
         ExtensionInstallReceiver(InstallationListener()).register(context)
     }
 
@@ -141,20 +156,35 @@ class ExtensionManager(
     /**
      * Loads and registers the installed extensions.
      */
-    private fun initExtensions() {
+    private suspend fun initExtensions() {
         val extensions = ExtensionLoader.loadExtensions(context)
 
-        installedExtensionMapFlow.value = extensions
+        // KMK -->
+        // Merge instead of overwrite: an install broadcast may have registered an extension while
+        // the initial load was still running; the newer entry wins.
+        val loadedInstalled = extensions
             .filterIsInstance<LoadResult.Success>()
             .associate { it.extension.pkgName to it.extension }
+        installedExtensionMapFlow.update { current -> loadedInstalled + current }
 
-        untrustedExtensionMapFlow.value = extensions
+        val loadedUntrusted = extensions
             .filterIsInstance<LoadResult.Untrusted>()
             .associate { it.extension.pkgName to it.extension }
             // SY -->
             .filterNotBlacklisted()
         // SY <--
+        untrustedExtensionMapFlow.update { current -> loadedUntrusted + current }
+        // KMK <--
 
+        // KMK -->
+        // installedExtensionsFlow is a stateIn() of the map and lags behind it. Wait (bounded) for it
+        // to catch up so that "initialized" really means the loaded extensions are observable.
+        if (loadedInstalled.isNotEmpty()) {
+            withTimeoutOrNull(2_000) {
+                installedExtensionsFlow.first { list -> list.size >= loadedInstalled.size }
+            }
+        }
+        // KMK <--
         _isInitialized.value = true
     }
 
