@@ -79,6 +79,8 @@ fun TabbedScreen(
                         }
                     },
                 )
+            } else if (tab.selectionToolbar != null) {
+                tab.selectionToolbar.invoke()
             } else {
                 // KMK <--
                 SearchToolbar(
@@ -132,5 +134,8 @@ data class TabContent(
     val badgeNumber: Int? = null,
     val searchEnabled: Boolean = false,
     val actions: ImmutableList<AppBar.AppBarAction> = persistentListOf(),
+    // KMK -->
+    val selectionToolbar: (@Composable () -> Unit)? = null,
+    // KMK <--
     val content: @Composable (contentPadding: PaddingValues, snackbarHostState: SnackbarHostState) -> Unit,
 )

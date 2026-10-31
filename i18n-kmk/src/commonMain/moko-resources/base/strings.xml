@@ -238,4 +238,7 @@
     <string name="pref_discord_show_download_button_summary">Displays a button to download the app</string>
     <string name="pref_discord_show_discord_button">Show Discord Button</string>
     <string name="pref_discord_show_discord_button_summary">Displays a button to join the Discord server</string>
+    <string name="pref_extension_long_press_selection">Select extensions on long press</string>
+    <string name="pref_extension_long_press_selection_summary">Long-press an extension to select several, then remove, install, update or trust them together</string>
+    <string name="ext_remove_selected_message">Remove %d selected extensions?</string>
 </resources>

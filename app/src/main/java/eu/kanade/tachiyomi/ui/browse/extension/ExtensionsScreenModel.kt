@@ -14,6 +14,7 @@ import eu.kanade.tachiyomi.extension.model.Extension
 import eu.kanade.tachiyomi.extension.model.InstallStep
 import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.system.LocaleHelper
+import eu.kanade.tachiyomi.util.system.isPackageInstalled
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -44,6 +45,10 @@ class ExtensionsScreenModel(
 ) : StateScreenModel<ExtensionsScreenModel.State>(State()) {
 
     private val currentDownloads = MutableStateFlow<Map<String, InstallStep>>(hashMapOf())
+
+    // KMK -->
+    private val appContext: Application by lazy { Injekt.get() }
+    // KMK <--
 
     init {
         val context = Injekt.get<Application>()
@@ -124,6 +129,9 @@ class ExtensionsScreenModel(
                         state.copy(
                             isLoading = false,
                             items = items,
+                            // KMK -->
+                            selection = state.selection.pruneTo(items),
+                            // KMK <--
                         )
                     }
                 }
@@ -138,6 +146,19 @@ class ExtensionsScreenModel(
         basePreferences.extensionInstaller().changes()
             .onEach { mutableState.update { state -> state.copy(installer = it) } }
             .launchIn(screenModelScope)
+
+        // KMK -->
+        preferences.extensionLongPressSelection().changes()
+            .onEach { enabled ->
+                mutableState.update { state ->
+                    state.copy(
+                        longPressSelection = enabled,
+                        selection = if (enabled) state.selection else emptySet(),
+                    )
+                }
+            }
+            .launchIn(screenModelScope)
+        // KMK <--
     }
 
     fun searchQueryPredicate(query: String): (Extension) -> Boolean {
@@ -262,6 +283,75 @@ class ExtensionsScreenModel(
             it.copy(nsfwOnly = !it.nsfwOnly)
         }
     }
+
+    fun toggleSelection(extension: Extension) {
+        val key = extension.selectionKey()
+        mutableState.update { state ->
+            state.copy(selection = if (key in state.selection) state.selection - key else state.selection + key)
+        }
+    }
+
+    fun clearSelection() {
+        mutableState.update { it.copy(selection = emptySet()) }
+    }
+
+    fun selectAll() {
+        mutableState.update { state ->
+            state.copy(selection = state.items.values.flatten().mapTo(HashSet()) { it.extension.selectionKey() })
+        }
+    }
+
+    fun invertSelection() {
+        mutableState.update { state ->
+            val all = state.items.values.flatten().mapTo(HashSet()) { it.extension.selectionKey() }
+            state.copy(selection = all - state.selection)
+        }
+    }
+
+    private fun selectedExtensions(): List<Extension> {
+        val selection = state.value.selection
+        return state.value.items.values.flatten()
+            .map { it.extension }
+            .filter { it.selectionKey() in selection }
+            .distinctBy { it.selectionKey() }
+    }
+
+    fun installSelected() {
+        val targets = selectedExtensions().filterIsInstance<Extension.Available>()
+        clearSelection()
+        targets.forEach { installExtension(it) }
+    }
+
+    fun updateSelected() {
+        val targets = selectedExtensions().filterIsInstance<Extension.Installed>().filter { it.hasUpdate }
+        clearSelection()
+        targets.forEach { updateExtension(it) }
+    }
+
+    fun trustSelected() {
+        val targets = selectedExtensions().filterIsInstance<Extension.Untrusted>()
+        clearSelection()
+        targets.forEach { trustExtension(it) }
+    }
+
+    fun uninstallSelected() {
+        val targets = selectedExtensions().filter { it !is Extension.Available }
+        clearSelection()
+        screenModelScope.launchIO {
+            targets.forEach { extension ->
+                // Extensions installed through the system show one uninstall dialog each, so space them out
+                val installedBySystem = appContext.isPackageInstalled(extension.pkgName)
+                uninstallExtension(extension)
+                if (installedBySystem) delay(300)
+            }
+        }
+    }
+
+    private fun Set<String>.pruneTo(items: ItemGroups): Set<String> {
+        if (isEmpty()) return this
+        val keys = items.values.flatMapTo(HashSet()) { list -> list.map { it.extension.selectionKey() } }
+        return filterTo(HashSet()) { it in keys }
+    }
     // KMK <--
 
     @Immutable
@@ -274,11 +364,21 @@ class ExtensionsScreenModel(
         val searchQuery: String? = null,
         // KMK -->
         val nsfwOnly: Boolean = false,
+        val longPressSelection: Boolean = false,
+        val selection: Set<String> = emptySet(),
         // KMK <--
     ) {
         val isEmpty = items.isEmpty()
+
+        // KMK -->
+        val selectionMode: Boolean get() = selection.isNotEmpty()
+        // KMK <--
     }
 }
+
+// KMK -->
+fun Extension.selectionKey() = "${pkgName}_$signatureHash"
+// KMK <--
 
 typealias ItemGroups = Map<ExtensionUiModel.Header, List<ExtensionUiModel.Item>>
 

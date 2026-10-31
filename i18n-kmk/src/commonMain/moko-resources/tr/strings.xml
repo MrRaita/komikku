@@ -210,4 +210,7 @@
     <string name="pref_discord_show_download_button_summary">Uygulamayı indirmek için bir buton gösterir</string>
     <string name="pref_discord_show_discord_button">Discord Butonunu Göster</string>
     <string name="pref_discord_show_discord_button_summary">Discord sunucusuna katılmak için bir buton gösterir</string>
+    <string name="pref_extension_long_press_selection">Uzun basınca seçim modu</string>
+    <string name="pref_extension_long_press_selection_summary">Bir uzantıya uzun basınca seçim modu açılır; seçilenleri birlikte kaldırabilir, kurabilir, güncelleyebilir veya güvenebilirsin</string>
+    <string name="ext_remove_selected_message">Seçilen %d uzantı kaldırılsın mı?</string>
 </resources>

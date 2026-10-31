@@ -95,6 +95,8 @@ class SourcePreferences(
     )
 
     fun disabledRepos() = preferenceStore.getStringSet("disabled_repos", emptySet())
+
+    fun extensionLongPressSelection() = preferenceStore.getBoolean("extension_long_press_selection", false)
     // KMK <--
 
     // SY -->

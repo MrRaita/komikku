@@ -1,6 +1,7 @@
 package eu.kanade.presentation.browse
 
 import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -57,6 +58,7 @@ import eu.kanade.tachiyomi.extension.model.Extension
 import eu.kanade.tachiyomi.extension.model.InstallStep
 import eu.kanade.tachiyomi.ui.browse.extension.ExtensionUiModel
 import eu.kanade.tachiyomi.ui.browse.extension.ExtensionsScreenModel
+import eu.kanade.tachiyomi.ui.browse.extension.selectionKey
 import eu.kanade.tachiyomi.util.system.LocaleHelper
 import eu.kanade.tachiyomi.util.system.launchRequestPackageInstallsPermission
 import kotlinx.collections.immutable.persistentListOf
@@ -93,6 +95,10 @@ fun ExtensionScreen(
     onOpenExtension: (Extension.Installed) -> Unit,
     onClickUpdateAll: () -> Unit,
     onRefresh: () -> Unit,
+    // KMK -->
+    selection: Set<String> = emptySet(),
+    onToggleSelection: (Extension) -> Unit = {},
+    // KMK <--
 ) {
     val navigator = LocalNavigator.currentOrThrow
 
@@ -134,6 +140,10 @@ fun ExtensionScreen(
                     onTrustExtension = onTrustExtension,
                     onOpenExtension = onOpenExtension,
                     onClickUpdateAll = onClickUpdateAll,
+                    // KMK -->
+                    selection = selection,
+                    onToggleSelection = onToggleSelection,
+                    // KMK <--
                 )
             }
         }
@@ -153,6 +163,10 @@ private fun ExtensionContent(
     onTrustExtension: (Extension.Untrusted) -> Unit,
     onOpenExtension: (Extension.Installed) -> Unit,
     onClickUpdateAll: () -> Unit,
+    // KMK -->
+    selection: Set<String>,
+    onToggleSelection: (Extension) -> Unit,
+    // KMK <--
 ) {
     val context = LocalContext.current
     var trustState by remember { mutableStateOf<Extension.Untrusted?>(null) }
@@ -247,6 +261,11 @@ private fun ExtensionContent(
                 ExtensionItem(
                     modifier = Modifier.animateItemFastScroll(),
                     item = item,
+                    // KMK -->
+                    selectionMode = selection.isNotEmpty(),
+                    isSelected = item.extension.selectionKey() in selection,
+                    onToggleSelection = onToggleSelection,
+                    // KMK <--
                     onClickItem = {
                         when (it) {
                             is Extension.Available -> onInstallExtension(it)
@@ -310,15 +329,33 @@ private fun ExtensionItem(
     onClickItemAction: (Extension) -> Unit,
     onClickItemSecondaryAction: (Extension) -> Unit,
     modifier: Modifier = Modifier,
+    // KMK -->
+    selectionMode: Boolean = false,
+    isSelected: Boolean = false,
+    onToggleSelection: (Extension) -> Unit = {},
+    // KMK <--
 ) {
     val (extension, installStep) = item
+    // KMK -->
+    // While selecting, a plain tap toggles the selection instead of opening/installing
+    val onClick = { if (selectionMode) onToggleSelection(extension) else onClickItem(extension) }
+    // KMK <--
     BaseBrowseItem(
         modifier = modifier
+            // KMK -->
+            .then(
+                if (isSelected) {
+                    Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.2f))
+                } else {
+                    Modifier
+                },
+            )
+            // KMK <--
             .combinedClickable(
-                onClick = { onClickItem(extension) },
+                onClick = onClick,
                 onLongClick = { onLongClickItem(extension) },
             ),
-        onClickItem = { onClickItem(extension) },
+        onClickItem = onClick,
         onLongClickItem = { onLongClickItem(extension) },
         icon = {
             Box(
