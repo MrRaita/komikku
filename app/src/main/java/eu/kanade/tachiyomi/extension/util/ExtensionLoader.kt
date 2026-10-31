@@ -134,39 +134,49 @@ internal object ExtensionLoader {
             pkgManager.getInstalledPackages(PACKAGE_FLAGS)
         }
 
+        // KMK -->
+        // privateExtPkgs used to be a lazy Sequence that was re-evaluated for every extension in
+        // selectExtensionPackage below, so every private APK was re-parsed (including its signature
+        // verification) once per extension: O(n²) work at startup. Evaluate it once, in parallel.
         val sharedExtPkgs = installedPkgs
-            .asSequence()
             .filter { isPackageAnExtension(it) }
             .map { ExtensionInfo(packageInfo = it, isShared = true) }
 
-        val privateExtPkgs = getPrivateExtensionDir(context)
+        val privateExtPkgs: List<ExtensionInfo> = getPrivateExtensionDir(context)
             .listFiles()
-            ?.asSequence()
             ?.filter { it.isFile && it.extension == PRIVATE_EXTENSION_EXTENSION }
-            ?.mapNotNull {
-                // Just in case, since Android 14+ requires them to be read-only
-                if (it.canWrite()) {
-                    it.setReadOnly()
-                }
+            ?.let { files ->
+                runBlocking {
+                    files
+                        .map { file ->
+                            async(Dispatchers.Default) {
+                                // Just in case, since Android 14+ requires them to be read-only
+                                if (file.canWrite()) {
+                                    file.setReadOnly()
+                                }
 
-                val path = it.absolutePath
-                pkgManager.getPackageArchiveInfo(path, PACKAGE_FLAGS)
-                    ?.apply { applicationInfo!!.fixBasePaths(path) }
+                                val path = file.absolutePath
+                                pkgManager.getPackageArchiveInfo(path, PACKAGE_FLAGS)
+                                    ?.apply { applicationInfo!!.fixBasePaths(path) }
+                            }
+                        }
+                        .awaitAll()
+                }
             }
+            ?.filterNotNull()
             ?.filter { isPackageAnExtension(it) }
             ?.map { ExtensionInfo(packageInfo = it, isShared = false) }
-            ?: emptySequence()
+            .orEmpty()
+        val privateExtPkgsByName = privateExtPkgs.associateBy { it.packageInfo.packageName }
 
         val extPkgs = (sharedExtPkgs + privateExtPkgs)
             // Remove duplicates. Shared takes priority than private by default
             .distinctBy { it.packageInfo.packageName }
             // Compare version number
             .mapNotNull { sharedPkg ->
-                val privatePkg = privateExtPkgs
-                    .singleOrNull { it.packageInfo.packageName == sharedPkg.packageInfo.packageName }
-                selectExtensionPackage(sharedPkg, privatePkg)
+                selectExtensionPackage(sharedPkg, privateExtPkgsByName[sharedPkg.packageInfo.packageName])
             }
-            .toList()
+        // KMK <--
 
         if (extPkgs.isEmpty()) return emptyList()
 
