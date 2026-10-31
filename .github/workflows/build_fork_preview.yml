@@ -1,0 +1,49 @@
+name: Build Preview (fork, no secrets)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: 'ubuntu-24.04'
+    steps:
+      - name: Clone Repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up JDK
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5.7.0
+        with:
+          java-version-file: .github/.java-version
+          distribution: temurin
+
+      - name: Write google-services.json
+        uses: DamianReeves/write-file-action@6929a9a6d1807689191dcc8bbe62b54d70a32b42 # v1.3
+        with:
+          path: app/google-services.json
+          contents: ${{ secrets.GOOGLE_SERVICES_JSON || '{}' }}
+          write-mode: overwrite
+
+      - name: Write client_secrets.json
+        uses: DamianReeves/write-file-action@6929a9a6d1807689191dcc8bbe62b54d70a32b42 # v1.3
+        with:
+          path: app/src/main/assets/client_secrets.json
+          contents: ${{ secrets.GOOGLE_CLIENT_SECRETS_JSON || '{}' }}
+          write-mode: overwrite
+
+      - name: Set up gradle
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6
+
+      - name: Build app
+        run: ./gradlew assemblePreview
+
+      - name: Upload APKs
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: komikku-preview-apks
+          path: app/build/outputs/apk/preview/*.apk
+          retention-days: 7
