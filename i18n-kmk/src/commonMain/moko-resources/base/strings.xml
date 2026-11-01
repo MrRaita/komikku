@@ -241,4 +241,10 @@
     <string name="pref_extension_long_press_selection">Select extensions on long press</string>
     <string name="pref_extension_long_press_selection_summary">Long-press an extension to select several, then remove, install, update or trust them together</string>
     <string name="ext_remove_selected_message">Remove %d selected extensions?</string>
+    <string name="ext_cancel_installs">Cancel installs</string>
+    <string name="ext_stop_uninstall">Stop removing</string>
+    <string name="ext_removing">Removing…</string>
+    <string name="ext_shizuku_permission_denied">Shizuku permission was denied. Switch to the normal installer mode?</string>
+    <string name="ext_shizuku_not_running">Shizuku is not running. Switch to the normal installer mode?</string>
+    <string name="ext_shizuku_switch">Switch</string>
 </resources>

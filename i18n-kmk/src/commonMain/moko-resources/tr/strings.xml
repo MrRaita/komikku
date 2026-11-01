@@ -213,4 +213,10 @@
     <string name="pref_extension_long_press_selection">Uzun basınca seçim modu</string>
     <string name="pref_extension_long_press_selection_summary">Bir uzantıya uzun basınca seçim modu açılır; seçilenleri birlikte kaldırabilir, kurabilir, güncelleyebilir veya güvenebilirsin</string>
     <string name="ext_remove_selected_message">Seçilen %d uzantı kaldırılsın mı?</string>
+    <string name="ext_cancel_installs">Kurulumları iptal et</string>
+    <string name="ext_stop_uninstall">Kaldırmayı durdur</string>
+    <string name="ext_removing">Kaldırılıyor…</string>
+    <string name="ext_shizuku_permission_denied">Shizuku izni reddedildi. Normal yükleyici moduna geçmek ister misiniz?</string>
+    <string name="ext_shizuku_not_running">Shizuku çalışmıyor. Normal yükleyici moduna geçmek ister misiniz?</string>
+    <string name="ext_shizuku_switch">Geç</string>
 </resources>

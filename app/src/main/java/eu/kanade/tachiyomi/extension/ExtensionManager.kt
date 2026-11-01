@@ -3,17 +3,20 @@ package eu.kanade.tachiyomi.extension
 import android.content.Context
 import android.graphics.drawable.Drawable
 import androidx.core.content.ContextCompat
+import eu.kanade.domain.base.BasePreferences
 import eu.kanade.domain.extension.interactor.TrustExtension
 import eu.kanade.domain.source.service.SourcePreferences
 import eu.kanade.tachiyomi.R
 import eu.kanade.tachiyomi.extension.api.ExtensionApi
 import eu.kanade.tachiyomi.extension.api.ExtensionUpdateNotifier
+import eu.kanade.tachiyomi.extension.installer.ShizukuHelper
 import eu.kanade.tachiyomi.extension.model.Extension
 import eu.kanade.tachiyomi.extension.model.InstallStep
 import eu.kanade.tachiyomi.extension.model.LoadResult
 import eu.kanade.tachiyomi.extension.util.ExtensionInstallReceiver
 import eu.kanade.tachiyomi.extension.util.ExtensionInstaller
 import eu.kanade.tachiyomi.extension.util.ExtensionLoader
+import eu.kanade.tachiyomi.util.system.isPackageInstalled
 import eu.kanade.tachiyomi.util.system.toast
 import exh.log.xLogD
 import exh.source.BlacklistedSources
@@ -376,8 +379,30 @@ class ExtensionManager(
      * @param extension The extension to uninstall.
      */
     fun uninstallExtension(extension: Extension) {
+        // KMK -->
+        // With Shizuku already allowed, remove silently instead of opening the system uninstall screen
+        if (Injekt.get<BasePreferences>().extensionInstaller().get() == BasePreferences.ExtensionInstaller.SHIZUKU &&
+            context.isPackageInstalled(extension.pkgName) &&
+            ShizukuHelper.status() == ShizukuHelper.Status.READY
+        ) {
+            scope.launch {
+                val failed = ShizukuHelper.uninstall(context, listOf(extension.pkgName))
+                if (failed == null || failed.isNotEmpty()) {
+                    installer.uninstallApk(extension.pkgName)
+                }
+            }
+            return
+        }
+        // KMK <--
         installer.uninstallApk(extension.pkgName)
     }
+
+    // KMK -->
+    /** Always goes through the regular path (system uninstall screen for packages installed by the system). */
+    fun uninstallExtensionViaSystem(extension: Extension) {
+        installer.uninstallApk(extension.pkgName)
+    }
+    // KMK <--
 
     /**
      * Adds the given extension to the list of trusted extensions. It also loads in background the

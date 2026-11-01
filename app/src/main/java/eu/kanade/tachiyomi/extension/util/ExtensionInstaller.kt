@@ -15,10 +15,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.onCompletion
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import logcat.LogPriority
 import okhttp3.OkHttpClient
@@ -70,7 +73,14 @@ internal class ExtensionInstaller(
             try {
                 step.value = InstallStep.Downloading
                 val request = Request.Builder().url(url).build()
-                httpClient.newCall(request).execute()
+                // KMK -->
+                // The download is a blocking call: cancelling the job alone would neither stop it nor the install after it
+                val call = httpClient.newCall(request)
+                val cancelHandle = coroutineContext.job.invokeOnCompletion { cause ->
+                    if (cause != null) call.cancel()
+                }
+                call.execute()
+                    // KMK <--
                     // KMK -->
                     .use { response ->
                         // KMK <--
@@ -87,10 +97,16 @@ internal class ExtensionInstaller(
                         }
                     }
 
+                // KMK -->
+                cancelHandle.dispose()
+                ensureActive()
+                // KMK <--
                 step.value = InstallStep.Installing
                 installApk(downloadId, tmpFile)
             } catch (e: Exception) {
-                if (e is InterruptedException) {
+                // KMK -->
+                if (e is InterruptedException || !isActive) {
+                    // KMK <--
                     // Canceled
                 } else {
                     logcat(LogPriority.ERROR, e)

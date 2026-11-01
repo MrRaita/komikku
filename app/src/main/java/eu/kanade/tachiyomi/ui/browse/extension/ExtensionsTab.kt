@@ -2,9 +2,11 @@ package eu.kanade.tachiyomi.ui.browse.extension
 
 import androidx.activity.compose.BackHandler
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Cancel
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.GetApp
 import androidx.compose.material.icons.outlined.Refresh
+import androidx.compose.material.icons.outlined.StopCircle
 import androidx.compose.material.icons.outlined.VerifiedUser
 import androidx.compose.material.icons.outlined._18UpRating
 import androidx.compose.material3.AlertDialog
@@ -31,6 +33,7 @@ import eu.kanade.tachiyomi.extension.model.Extension
 import eu.kanade.tachiyomi.ui.browse.extension.details.ExtensionDetailsScreen
 import eu.kanade.tachiyomi.ui.webview.WebViewScreen
 import eu.kanade.tachiyomi.util.system.isPackageInstalled
+import eu.kanade.tachiyomi.util.system.launchRequestPackageInstallsPermission
 import kotlinx.collections.immutable.ImmutableList
 import kotlinx.collections.immutable.persistentListOf
 import tachiyomi.i18n.MR
@@ -64,7 +67,7 @@ fun extensionsTab(
             .distinctBy { it.selectionKey() }
             .toList()
     }
-    val selectionToolbar: (@Composable () -> Unit)? = if (state.selectionMode) {
+    val selectionToolbar: (@Composable () -> Unit)? = if (state.selectionMode || state.isUninstalling) {
         {
             ExtensionSelectionToolbar(
                 selectedCount = selectedExtensions.size,
@@ -72,6 +75,8 @@ fun extensionsTab(
                 canUpdate = selectedExtensions.any { it is Extension.Installed && it.hasUpdate },
                 canTrust = selectedExtensions.any { it is Extension.Untrusted },
                 canUninstall = selectedExtensions.any { it !is Extension.Available },
+                canCancelInstall = selectedExtensions.any { downloads[it.selectionKey()]?.isCompleted() == false },
+                isUninstalling = state.isUninstalling,
                 onClearSelection = extensionsScreenModel::clearSelection,
                 onSelectAll = extensionsScreenModel::selectAll,
                 onInvertSelection = extensionsScreenModel::invertSelection,
@@ -79,6 +84,8 @@ fun extensionsTab(
                 onUpdate = extensionsScreenModel::updateSelected,
                 onTrust = { confirmTrustSelected = true },
                 onUninstall = { confirmUninstallSelected = true },
+                onCancelInstall = extensionsScreenModel::cancelSelectedInstalls,
+                onStopUninstall = extensionsScreenModel::cancelUninstall,
             )
         }
     } else {
@@ -244,6 +251,40 @@ fun extensionsTab(
                     onDismissRequest = { confirmTrustSelected = false },
                 )
             }
+            state.shizukuPrompt?.let { prompt ->
+                AlertDialog(
+                    title = {
+                        Text(text = stringResource(MR.strings.ext_installer_shizuku))
+                    },
+                    text = {
+                        Text(
+                            text = stringResource(
+                                when (prompt.reason) {
+                                    ShizukuPrompt.Reason.PermissionDenied -> KMR.strings.ext_shizuku_permission_denied
+                                    ShizukuPrompt.Reason.NotRunning -> KMR.strings.ext_shizuku_not_running
+                                },
+                            ),
+                        )
+                    },
+                    confirmButton = {
+                        TextButton(
+                            onClick = {
+                                if (extensionsScreenModel.answerShizukuPrompt(switchToNormal = true)) {
+                                    context.launchRequestPackageInstallsPermission()
+                                }
+                            },
+                        ) {
+                            Text(text = stringResource(KMR.strings.ext_shizuku_switch))
+                        }
+                    },
+                    dismissButton = {
+                        TextButton(onClick = { extensionsScreenModel.answerShizukuPrompt(switchToNormal = false) }) {
+                            Text(text = stringResource(MR.strings.action_cancel))
+                        }
+                    },
+                    onDismissRequest = { extensionsScreenModel.answerShizukuPrompt(switchToNormal = false) },
+                )
+            }
             // KMK <--
         },
     )
@@ -257,6 +298,8 @@ private fun ExtensionSelectionToolbar(
     canUpdate: Boolean,
     canTrust: Boolean,
     canUninstall: Boolean,
+    canCancelInstall: Boolean,
+    isUninstalling: Boolean,
     onClearSelection: () -> Unit,
     onSelectAll: () -> Unit,
     onInvertSelection: () -> Unit,
@@ -264,6 +307,8 @@ private fun ExtensionSelectionToolbar(
     onUpdate: () -> Unit,
     onTrust: () -> Unit,
     onUninstall: () -> Unit,
+    onCancelInstall: () -> Unit,
+    onStopUninstall: () -> Unit,
 ) {
     val actions: ImmutableList<AppBar.AppBarAction> = persistentListOf<AppBar.AppBarAction>().builder().apply {
         if (canUninstall) {
@@ -302,6 +347,24 @@ private fun ExtensionSelectionToolbar(
                 ),
             )
         }
+        if (canCancelInstall) {
+            add(
+                AppBar.Action(
+                    title = stringResource(KMR.strings.ext_cancel_installs),
+                    icon = Icons.Outlined.Cancel,
+                    onClick = onCancelInstall,
+                ),
+            )
+        }
+        if (isUninstalling) {
+            add(
+                AppBar.Action(
+                    title = stringResource(KMR.strings.ext_stop_uninstall),
+                    icon = Icons.Outlined.StopCircle,
+                    onClick = onStopUninstall,
+                ),
+            )
+        }
         add(
             AppBar.OverflowAction(
                 title = stringResource(MR.strings.action_select_all),
@@ -317,7 +380,15 @@ private fun ExtensionSelectionToolbar(
     }.build()
 
     AppBar(
-        titleContent = { AppBarTitle(selectedCount.toString()) },
+        titleContent = {
+            AppBarTitle(
+                if (selectedCount == 0 && isUninstalling) {
+                    stringResource(KMR.strings.ext_removing)
+                } else {
+                    selectedCount.toString()
+                },
+            )
+        },
         actions = { AppBarActions(actions) },
         isActionMode = true,
         onCancelActionMode = onClearSelection,

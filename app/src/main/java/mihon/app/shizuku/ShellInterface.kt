@@ -165,6 +165,18 @@ class ShellInterface : IShellInterface.Stub() {
         }
     }
 
+    // KMK -->
+    override fun uninstall(packageName: String, userId: Int): Boolean {
+        val process = ProcessBuilder("/system/bin/pm", "uninstall", "--user", userId.toString(), packageName)
+            .redirectErrorStream(true)
+            .start()
+        val output = process.inputStream.bufferedReader().use { it.readText() }
+        val exitCode = process.waitFor()
+        Log.d("ShellInterface", "pm uninstall $packageName -> $exitCode: ${output.trim()}")
+        return exitCode == 0 && output.contains("Success", ignoreCase = true)
+    }
+    // KMK <--
+
     override fun destroy() {
         exitProcess(0)
     }

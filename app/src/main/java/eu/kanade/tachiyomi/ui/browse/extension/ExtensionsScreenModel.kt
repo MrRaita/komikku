@@ -10,13 +10,17 @@ import eu.kanade.domain.extension.interactor.GetExtensionsByType
 import eu.kanade.domain.source.service.SourcePreferences
 import eu.kanade.presentation.components.SEARCH_DEBOUNCE_MILLIS
 import eu.kanade.tachiyomi.extension.ExtensionManager
+import eu.kanade.tachiyomi.extension.installer.ShizukuHelper
 import eu.kanade.tachiyomi.extension.model.Extension
 import eu.kanade.tachiyomi.extension.model.InstallStep
 import eu.kanade.tachiyomi.source.online.HttpSource
 import eu.kanade.tachiyomi.util.lang.throttleLatest
 import eu.kanade.tachiyomi.util.system.LocaleHelper
 import eu.kanade.tachiyomi.util.system.isPackageInstalled
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -32,16 +36,19 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.takeWhile
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import tachiyomi.core.common.util.lang.launchIO
 import tachiyomi.i18n.MR
 import tachiyomi.i18n.kmk.KMR
 import uy.kohesive.injekt.Injekt
 import uy.kohesive.injekt.api.get
+import java.util.concurrent.ConcurrentHashMap
 import kotlin.time.Duration.Companion.seconds
 
 class ExtensionsScreenModel(
     preferences: SourcePreferences = Injekt.get(),
-    basePreferences: BasePreferences = Injekt.get(),
+    private val basePreferences: BasePreferences = Injekt.get(),
     private val extensionManager: ExtensionManager = Injekt.get(),
     private val getExtensions: GetExtensionsByType = Injekt.get(),
 ) : StateScreenModel<ExtensionsScreenModel.State>(State()) {
@@ -201,31 +208,119 @@ class ExtensionsScreenModel(
     }
 
     fun updateAllExtensions() {
-        screenModelScope.launchIO {
-            state.value.items.values.flatten()
-                .map { it.extension }
-                .filterIsInstance<Extension.Installed>()
-                .filter { it.hasUpdate }
-                .forEach(::updateExtension)
-        }
+        // KMK -->
+        val targets = state.value.items.values.flatten()
+            .map { it.extension }
+            .filterIsInstance<Extension.Installed>()
+            .filter { it.hasUpdate }
+        runWithInstaller { targets.forEach { startUpdate(it) } }
+        // KMK <--
     }
 
     fun installExtension(extension: Extension.Available) {
-        screenModelScope.launchIO {
-            extensionManager.installExtension(extension).collectToInstallUpdate(extension)
-        }
+        // KMK -->
+        runWithInstaller { startInstall(extension) }
+        // KMK <--
     }
 
     fun updateExtension(extension: Extension.Installed) {
-        screenModelScope.launchIO {
-            extensionManager.updateExtension(extension).collectToInstallUpdate(extension)
-        }
+        // KMK -->
+        runWithInstaller { startUpdate(extension) }
+        // KMK <--
     }
 
     fun cancelInstallUpdateExtension(extension: Extension) {
+        // KMK -->
+        installJobs.remove(extension.selectionKey())?.cancel()
+        // KMK <--
         extensionManager.cancelInstallUpdateExtension(extension)
         removeDownloadState(extension)
     }
+
+    // KMK -->
+    private val installJobs = ConcurrentHashMap<String, Job>()
+
+    private fun startInstall(extension: Extension.Available) {
+        trackInstall(extension) { extensionManager.installExtension(extension) }
+    }
+
+    private fun startUpdate(extension: Extension.Installed) {
+        trackInstall(extension) { extensionManager.updateExtension(extension) }
+    }
+
+    private fun trackInstall(extension: Extension, installFlow: () -> Flow<InstallStep>) {
+        val key = extension.selectionKey()
+        val job = screenModelScope.launchIO {
+            installFlow().collectToInstallUpdate(extension)
+        }
+        installJobs[key] = job
+        job.invokeOnCompletion { installJobs.remove(key, job) }
+    }
+
+    private fun isInstalling(extension: Extension): Boolean {
+        return downloads.value[extension.selectionKey()]?.isCompleted() == false
+    }
+
+    /** Runs [block] once the configured installer is usable; asks about falling back when Shizuku isn't. */
+    private fun runWithInstaller(forInstall: Boolean = true, block: suspend () -> Unit) {
+        screenModelScope.launchIO {
+            if (ensureInstallerUsable(forInstall)) block()
+        }
+    }
+
+    private val shizukuMutex = Mutex()
+    private var shizukuAnswer: CompletableDeferred<Boolean>? = null
+    private var shizukuPromptForInstall = true
+
+    private suspend fun ensureInstallerUsable(forInstall: Boolean): Boolean = shizukuMutex.withLock {
+        if (basePreferences.extensionInstaller().get() != BasePreferences.ExtensionInstaller.SHIZUKU) {
+            return@withLock true
+        }
+        when (ShizukuHelper.status()) {
+            ShizukuHelper.Status.READY -> true
+            ShizukuHelper.Status.NEEDS_PERMISSION -> {
+                if (ShizukuHelper.requestPermission()) {
+                    true
+                } else {
+                    askToSwitchInstaller(ShizukuPrompt.Reason.PermissionDenied, forInstall)
+                }
+            }
+            ShizukuHelper.Status.NOT_RUNNING -> askToSwitchInstaller(ShizukuPrompt.Reason.NotRunning, forInstall)
+        }
+    }
+
+    private suspend fun askToSwitchInstaller(reason: ShizukuPrompt.Reason, forInstall: Boolean): Boolean {
+        val answer = CompletableDeferred<Boolean>()
+        shizukuAnswer = answer
+        shizukuPromptForInstall = forInstall
+        mutableState.update { it.copy(shizukuPrompt = ShizukuPrompt(reason, forInstall)) }
+        return try {
+            answer.await()
+        } finally {
+            shizukuAnswer = null
+            mutableState.update { it.copy(shizukuPrompt = null) }
+        }
+    }
+
+    /**
+     * Answer to the "Shizuku unavailable, switch to the normal installer?" question.
+     *
+     * @return true when the user still has to allow installing apps from this app before installs can work;
+     *   the pending operation is dropped in that case.
+     */
+    fun answerShizukuPrompt(switchToNormal: Boolean): Boolean {
+        var needsInstallPermission = false
+        if (switchToNormal) {
+            val installerPref = basePreferences.extensionInstaller()
+            installerPref.set(installerPref.defaultValue())
+            needsInstallPermission = shizukuPromptForInstall &&
+                installerPref.get().requiresSystemPermission &&
+                !appContext.packageManager.canRequestPackageInstalls()
+        }
+        shizukuAnswer?.complete(switchToNormal && !needsInstallPermission)
+        return needsInstallPermission
+    }
+    // KMK <--
 
     private fun addDownloadState(extension: Extension, installStep: InstallStep) {
         currentDownloads.update {
@@ -258,7 +353,13 @@ class ExtensionsScreenModel(
             .collect()
 
     fun uninstallExtension(extension: Extension) {
-        extensionManager.uninstallExtension(extension)
+        // KMK -->
+        screenModelScope.launchIO {
+            if (!appContext.isPackageInstalled(extension.pkgName) || ensureInstallerUsable(forInstall = false)) {
+                extensionManager.uninstallExtension(extension)
+            }
+        }
+        // KMK <--
     }
 
     fun findAvailableExtensions() {
@@ -320,15 +421,16 @@ class ExtensionsScreenModel(
     }
 
     fun installSelected() {
-        val targets = selectedExtensions().filterIsInstance<Extension.Available>()
-        clearSelection()
-        targets.forEach { installExtension(it) }
+        val targets = selectedExtensions().filterIsInstance<Extension.Available>().filter { !isInstalling(it) }
+        if (targets.isEmpty()) return
+        runWithInstaller { targets.forEach { startInstall(it) } }
     }
 
     fun updateSelected() {
-        val targets = selectedExtensions().filterIsInstance<Extension.Installed>().filter { it.hasUpdate }
-        clearSelection()
-        targets.forEach { updateExtension(it) }
+        val targets = selectedExtensions().filterIsInstance<Extension.Installed>()
+            .filter { it.hasUpdate && !isInstalling(it) }
+        if (targets.isEmpty()) return
+        runWithInstaller { targets.forEach { startUpdate(it) } }
     }
 
     fun trustSelected() {
@@ -337,17 +439,47 @@ class ExtensionsScreenModel(
         targets.forEach { trustExtension(it) }
     }
 
+    fun cancelSelectedInstalls() {
+        selectedExtensions().filter { isInstalling(it) }.forEach { cancelInstallUpdateExtension(it) }
+    }
+
+    private var uninstallJob: Job? = null
+
     fun uninstallSelected() {
+        if (uninstallJob?.isActive == true) return
         val targets = selectedExtensions().filter { it !is Extension.Available }
-        clearSelection()
-        screenModelScope.launchIO {
-            targets.forEach { extension ->
-                // Extensions installed through the system show one uninstall dialog each, so space them out
-                val installedBySystem = appContext.isPackageInstalled(extension.pkgName)
-                uninstallExtension(extension)
-                if (installedBySystem) delay(300)
+        if (targets.isEmpty()) return
+        uninstallJob = screenModelScope.launchIO {
+            mutableState.update { it.copy(isUninstalling = true) }
+            try {
+                val (installedBySystem, privateOnes) = targets.partition { appContext.isPackageInstalled(it.pkgName) }
+                privateOnes.forEach {
+                    ensureActive()
+                    extensionManager.uninstallExtension(it)
+                }
+                if (installedBySystem.isEmpty() || !ensureInstallerUsable(forInstall = false)) return@launchIO
+
+                var remaining = installedBySystem
+                if (basePreferences.extensionInstaller().get() == BasePreferences.ExtensionInstaller.SHIZUKU) {
+                    // Silent removal; whatever Shizuku couldn't remove goes through the system screen below
+                    val byPackage = installedBySystem.associateBy { it.pkgName }
+                    val failed = ShizukuHelper.uninstall(appContext, installedBySystem.map { it.pkgName })
+                    remaining = failed?.mapNotNull { byPackage[it] } ?: installedBySystem
+                }
+                // The system shows one uninstall dialog per package, so space them out
+                remaining.forEach {
+                    ensureActive()
+                    extensionManager.uninstallExtensionViaSystem(it)
+                    delay(300)
+                }
+            } finally {
+                mutableState.update { it.copy(isUninstalling = false) }
             }
         }
+    }
+
+    fun cancelUninstall() {
+        uninstallJob?.cancel()
     }
 
     private fun Set<String>.pruneTo(items: ItemGroups): Set<String> {
@@ -369,6 +501,8 @@ class ExtensionsScreenModel(
         val nsfwOnly: Boolean = false,
         val longPressSelection: Boolean = false,
         val selection: Set<String> = emptySet(),
+        val shizukuPrompt: ShizukuPrompt? = null,
+        val isUninstalling: Boolean = false,
         // KMK <--
     ) {
         val isEmpty = items.isEmpty()
@@ -381,6 +515,11 @@ class ExtensionsScreenModel(
 
 // KMK -->
 private const val LIST_UPDATE_THROTTLE_MILLIS = 150L
+
+/** Asked when the Shizuku installer can't be used: offer to switch to the normal installer. */
+data class ShizukuPrompt(val reason: Reason, val forInstall: Boolean) {
+    enum class Reason { PermissionDenied, NotRunning }
+}
 
 fun Extension.selectionKey() = "${pkgName}_$signatureHash"
 // KMK <--
